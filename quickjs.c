@@ -40052,6 +40052,18 @@ static JSValue JS_ReadModule(BCReaderState *s)
      * remaining length can never be valid. */
     if (m->req_module_entries_count < 0 ||
         m->req_module_entries_count > s->buf_end - s->ptr) {
+        /* The module was added to ctx->loaded_modules by
+         * js_new_module_def() before this field was read, so the very next
+         * JS_ThrowSyntaxError() may run the GC (it allocates the Error
+         * object). If it does, JS_MarkContext() -> js_mark_module_def()
+         * walks this count against a *not-yet-allocated* entries array
+         * (still NULL) and dereferences a near-NULL JSExportEntry ->
+         * SEGV at offsetof(JSExportEntry, export_type) (fuzzer-found).
+         * The fail: clamp added above only runs AFTER the throw, so it
+         * cannot help here. Zero the count before throwing so the GC
+         * mark walk skips it (count 0 + NULL array is a consistent
+         * empty module). */
+m->req_module_entries_count = 0;
         JS_ThrowSyntaxError(ctx, "invalid module reference count");
         goto fail;
     }
@@ -40092,6 +40104,18 @@ static JSValue JS_ReadModule(BCReaderState *s)
         goto fail;
     if (m->export_entries_count < 0 ||
         m->export_entries_count > s->buf_end - s->ptr) {
+        /* The module was added to ctx->loaded_modules by
+         * js_new_module_def() before this field was read, so the very next
+         * JS_ThrowSyntaxError() may run the GC (it allocates the Error
+         * object). If it does, JS_MarkContext() -> js_mark_module_def()
+         * walks this count against a *not-yet-allocated* entries array
+         * (still NULL) and dereferences a near-NULL JSExportEntry ->
+         * SEGV at offsetof(JSExportEntry, export_type) (fuzzer-found).
+         * The fail: clamp added above only runs AFTER the throw, so it
+         * cannot help here. Zero the count before throwing so the GC
+         * mark walk skips it (count 0 + NULL array is a consistent
+         * empty module). */
+m->export_entries_count = 0;
         JS_ThrowSyntaxError(ctx, "invalid export entry count");
         goto fail;
     }
@@ -40123,6 +40147,18 @@ static JSValue JS_ReadModule(BCReaderState *s)
         goto fail;
     if (m->star_export_entries_count < 0 ||
         m->star_export_entries_count > s->buf_end - s->ptr) {
+        /* The module was added to ctx->loaded_modules by
+         * js_new_module_def() before this field was read, so the very next
+         * JS_ThrowSyntaxError() may run the GC (it allocates the Error
+         * object). If it does, JS_MarkContext() -> js_mark_module_def()
+         * walks this count against a *not-yet-allocated* entries array
+         * (still NULL) and dereferences a near-NULL JSExportEntry ->
+         * SEGV at offsetof(JSExportEntry, export_type) (fuzzer-found).
+         * The fail: clamp added above only runs AFTER the throw, so it
+         * cannot help here. Zero the count before throwing so the GC
+         * mark walk skips it (count 0 + NULL array is a consistent
+         * empty module). */
+m->star_export_entries_count = 0;
         JS_ThrowSyntaxError(ctx, "invalid star export entry count");
         goto fail;
     }
@@ -40142,6 +40178,18 @@ static JSValue JS_ReadModule(BCReaderState *s)
         goto fail;
     if (m->import_entries_count < 0 ||
         m->import_entries_count > s->buf_end - s->ptr) {
+        /* The module was added to ctx->loaded_modules by
+         * js_new_module_def() before this field was read, so the very next
+         * JS_ThrowSyntaxError() may run the GC (it allocates the Error
+         * object). If it does, JS_MarkContext() -> js_mark_module_def()
+         * walks this count against a *not-yet-allocated* entries array
+         * (still NULL) and dereferences a near-NULL JSExportEntry ->
+         * SEGV at offsetof(JSExportEntry, export_type) (fuzzer-found).
+         * The fail: clamp added above only runs AFTER the throw, so it
+         * cannot help here. Zero the count before throwing so the GC
+         * mark walk skips it (count 0 + NULL array is a consistent
+         * empty module). */
+m->import_entries_count = 0;
         JS_ThrowSyntaxError(ctx, "invalid import entry count");
         goto fail;
     }
