@@ -1,16 +1,25 @@
-/* AOT vs interpreter, same process and same JSRuntime — the only difference is
- * which implementation of fib() runs, so startup cost cancels out of the
- * comparison. Both sides are entered through the same JSValue-based ABI:
- * the interpreter through JS_Call, the AOT function through its C signature.
+/* Three-way comparison in one process against one JSRuntime:
+ *
+ *   native C     — the ceiling. No JSValue ever crosses a call boundary.
+ *   aot          — JS translated to C99, gcc -O2, dlopen'd .so, but still
+ *                  living inside QuickJS's value model.
+ *   interpreter  — QuickJS bytecode dispatch.
+ *
+ * native vs aot is therefore the cost of the value model (boxing, refcounting,
+ * GC), which is the hard ceiling on what any JS->C translation can reach.
+ * aot vs interpreter is the payoff.
  *
  * usage: bench [n] [reps] */
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 #include "quickjs.h"
+
+int32_t native_fib(int32_t n);
 
 typedef JSValue (*fib_fn)(JSContext *, JSValue *, int);
 
@@ -33,10 +42,10 @@ static int cmp_double(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-/* time `reps` calls, return median ms; result goes to *out */
-static double time_calls(JSValue (*call)(void *, JSContext *, JSValue *, int),
-                         void *ud, JSContext *ctx, JSValue *arg, int reps,
-                         int warm, int32_t *out)
+typedef JSValue (*call_fn)(void *, JSContext *, JSValue *, int);
+
+static double time_calls(call_fn call, void *ud, JSContext *ctx, JSValue *arg,
+                         int reps, int warm, int32_t *out)
 {
     double *t = malloc(sizeof(double) * reps);
     int i;
@@ -65,16 +74,24 @@ static double time_calls(JSValue (*call)(void *, JSContext *, JSValue *, int),
 
 static JSValue call_interp(void *ud, JSContext *ctx, JSValue *arg, int argc)
 {
-    JSValue *fnval = ud;
+    JSValue fnval = *(JSValue *)ud;
     JSValue nargs[1];
     nargs[0] = *arg;
     (void)argc;
-    return JS_Call(ctx, *fnval, JS_UNDEFINED, 1, nargs);
+    return JS_Call(ctx, fnval, JS_UNDEFINED, 1, nargs);
 }
 
 static JSValue call_aot(void *ud, JSContext *ctx, JSValue *arg, int argc)
 {
     return ((fib_fn)ud)(ctx, arg, argc);
+}
+
+static JSValue call_native(void *ud, JSContext *ctx, JSValue *arg, int argc)
+{
+    int32_t n = 0;
+    (void)ud; (void)argc;
+    JS_ToInt32(ctx, &n, *arg);
+    return JS_NewInt32(ctx, native_fib(n));
 }
 
 int main(int argc, char **argv)
@@ -85,14 +102,13 @@ int main(int argc, char **argv)
     JSRuntime *rt;
     JSContext *ctx;
     JSValue global, fnval, arg;
-    int32_t vi = 0, va = 0;
-    double ti, ta;
+    int32_t vi = 0, va = 0, vn = 0;
+    double ti, ta, tn;
     void *h;
     fib_fn aot;
 
     rt = JS_NewRuntime();
     ctx = JS_NewContext(rt);
-
 
     {
         JSValue setup = JS_Eval(ctx, SRC, strlen(SRC), "<setup>",
@@ -115,6 +131,7 @@ int main(int argc, char **argv)
     arg = JS_NewInt32(ctx, n);
 
     ti = time_calls(call_interp, &fnval, ctx, &arg, reps, warm, &vi);
+    tn = time_calls(call_native, NULL, ctx, &arg, reps, warm, &vn);
 
     h = dlopen("./libaotfib.so", RTLD_NOW | RTLD_LOCAL);
     if (!h) {
@@ -129,14 +146,17 @@ int main(int argc, char **argv)
     ta = time_calls(call_aot, (void *)aot, ctx, &arg, reps, warm, &va);
 
     printf("fib(%d), median of %d runs (%d warmup)\n", n, reps, warm);
+    printf("  native C    : %9.3f ms   result=%d\n", tn, vn);
+    printf("  aot (c99)   : %9.3f ms   result=%d\n", ta, va);
     printf("  interpreter : %9.3f ms   result=%d\n", ti, vi);
-    printf("  aot         : %9.3f ms   result=%d\n", ta, va);
-    if (vi != va) {
-        printf("  MISMATCH    : %d vs %d\n", vi, va);
+    if (vi != va || vi != vn) {
+        printf("  MISMATCH    : interp=%d aot=%d native=%d\n", vi, va, vn);
         return 1;
     }
-    printf("  speedup     : %8.2fx  (%s)\n", ti / ta,
-           ta < ti ? "aot faster" : "AOT SLOWER");
+    printf("\n  aot vs interpreter     : %7.2fx   <- the payoff\n", ti / ta);
+    printf("  aot vs native          : %7.2fx   <- cost of the JS value model\n",
+           ta / tn);
+    printf("  interpreter vs native  : %7.2fx\n", ti / tn);
 
     JS_FreeValue(ctx, arg);
     JS_FreeValue(ctx, fnval);
