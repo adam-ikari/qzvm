@@ -1189,6 +1189,72 @@ JS_EXTERN void JS_SetHostPromiseRejectionTracker(JSRuntime *rt, JSHostPromiseRej
 /* return != 0 if the JS code needs to be interrupted */
 typedef int JSInterruptHandler(JSContext *ctx, void *opaque);
 JS_EXTERN void JS_SetInterruptHandler(JSRuntime *rt, JSInterruptHandler *cb, void *opaque);
+
+/* ====== qwrt Debugger API ======
+ * Added by deps/quickjs-ng-debugger.patch. When a debugger is attached
+ * (JS_SetDebuggerHandler with a non-NULL hooks), the bytecode dispatch loop
+ * calls hooks->on_dispatch once per opcode. The handler must return 0 to
+ * continue; to pause it BLOCKS inside on_dispatch (e.g. pumping a debug
+ * protocol) until the host signals resume, then returns 0. It must NEVER
+ * return non-zero (that would abort via JS_ThrowInterrupted). */
+
+struct JSStackFrame; /* forward — internal type, exposed by name only */
+
+typedef struct JSDebuggerHooks {
+    int  (*on_dispatch)(JSContext *ctx, struct JSStackFrame *sf,
+                        const uint8_t *pc, void *opaque);
+    /* Called from JS_Throw — the single funnel every real throw reaches
+     * (JS_ThrowError2, OP_throw, host functions, async rejections) — BEFORE
+     * the exception is stored into rt->current_exception, so the handler can
+     * pause-pump without clobbering propagation state. Frames are intact
+     * (pre-unwind). NOT called for engine-internal restorations of an
+     * already-thrown exception (build_backtrace save/restore, iterator-close
+     * and dispose resurrections — see js_throw_restored) nor for
+     * JS_UNINITIALIZED placeholders. The handler must return promptly; the
+     * engine holds a refcount on `exception` across the call. */
+    void (*on_throw)(JSContext *ctx, JSValueConst exception, void *opaque);
+    void *opaque;
+} JSDebuggerHooks;
+
+JS_EXTERN void JS_SetDebuggerHandler(JSRuntime *rt, JSDebuggerHooks *hooks);
+
+typedef struct JSDebugVar {
+    char    *name;      /* malloc'd atom string; NULL on failure */
+    int      kind;      /* 0=argument, 1=local var, 2=closure-captured (var_ref) */
+    uint16_t idx;       /* index into arg_buf (kind 0) / var_buf (kind 1) /
+                           var_refs (kind 2) */
+} JSDebugVar;
+
+typedef struct JSDebugFrame {
+    char    *filename;  /* malloc'd, may be NULL */
+    char    *func_name; /* malloc'd, "<anonymous>" if none */
+    int      line;      /* 1-based; -1 if unknown */
+    int      col;       /* 1-based; -1 if unknown */
+    int      arg_count;
+    int      var_count;
+    JSDebugVar *vars;   /* malloc'd array, arg_count+var_count entries */
+} JSDebugFrame;
+
+/* Walk rt->current_stack_frame via prev_frame. Returns a malloc'd array
+ * (caller frees with JS_FreeCallFrames) or NULL on OOM. Only valid on the JS
+ * thread (e.g. from inside on_dispatch while paused). */
+JS_EXTERN JSDebugFrame *JS_GetCallFrames(JSContext *ctx, int *p_count);
+JS_EXTERN void          JS_FreeCallFrames(JSContext *ctx, JSDebugFrame *frames, int count);
+
+/* Dup'd JSValue for the var at var_index in the frame at frame_index (0 =
+ * topmost = current). Caller MUST JS_FreeValue the result. JS_EXCEPTION on
+ * bad index. */
+JS_EXTERN JSValue JS_GetFrameVariable(JSContext *ctx, int frame_index,
+                                      int var_index);
+
+/* Map a frame's current pc to a 1-based line/col. -1 if unknown. */
+JS_EXTERN int JS_PcToLine(JSContext *ctx, struct JSStackFrame *sf,
+                          const uint8_t *pc, int *col);
+
+/* Returns 1 if pc points at the `debugger;` opcode (OP_debugger), else 0.
+ * Lets the attached debugger pause on `debugger;` statements. */
+JS_EXTERN int JS_IsDebuggerOpcode(const uint8_t *pc);
+
 /* if can_block is true, Atomics.wait() can be used */
 JS_EXTERN void JS_SetCanBlock(JSRuntime *rt, bool can_block);
 /* set the [IsHTMLDDA] internal slot */

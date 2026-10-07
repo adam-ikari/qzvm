@@ -371,6 +371,13 @@ DEF(   is_undefined, 1, 1, 1, none)
 DEF(        is_null, 1, 1, 1, none)
 DEF(typeof_is_undefined, 1, 1, 1, none)
 DEF( typeof_is_function, 1, 1, 1, none)
+/* qwrt: emitted by the `debugger;` statement. The interpreter is a no-op
+ * unless a debugger is attached, in which case on_dispatch pauses.
+ * Appended at the END of the opcode table so adding it does NOT shift any
+ * existing opcode number -- shifting would break bytecode compatibility
+ * with pre-existing bytecode (e.g. the inlined polyfill), since short
+ * opcodes following `nop` overlap temporaries and are heavily used. */
+DEF(         debugger, 1, 0, 0, none)
 
 #undef DEF
 #undef def
