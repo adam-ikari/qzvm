@@ -2552,6 +2552,30 @@ int JS_ExecutePendingJob(JSRuntime *rt, JSContext **pctx)
     return ret;
 }
 
+/* Remove (without executing) the pending jobs belonging to 'ctx'.
+ * Call before JS_FreeContext on a context that may still have queued jobs
+ * (e.g. pending promise reactions): JS_FreeContext does not touch
+ * rt->job_list, so the entries would keep a dangling 'ctx' pointer and the
+ * next JS_ExecutePendingJob would use freed memory.
+ * Returns the number of entries removed. */
+int JS_DrainPendingJobsForContext(JSRuntime *rt, JSContext *ctx)
+{
+    struct list_head *el, *el1;
+    int n = 0;
+
+    list_for_each_safe(el, el1, &rt->job_list) {
+        JSJobEntry *e = list_entry(el, JSJobEntry, link);
+        if (e->ctx != ctx)
+            continue;
+        list_del(&e->link);
+        for(int i = 0; i < e->argc; i++)
+            JS_FreeValueRT(rt, e->argv[i]);
+        js_free_rt(rt, e);
+        n++;
+    }
+    return n;
+}
+
 static inline uint32_t atom_get_free(const JSAtomStruct *p)
 {
     return (uintptr_t)p >> 1;
